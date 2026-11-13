@@ -248,6 +248,32 @@ test('reconcile 桥：逐条回报 opened / unknown（供 dsh-skill-lazy 分别�
     '揭示后 github 工具不应再出现在 deny 里')
 })
 
+test('reveal 零命中：不改可见集，但必须把掩码原样挂回去', () => {
+  const host = makeHost()
+  apply(host.ctx, { core: ['pwsh'] })
+  const agent = makeAgent(host, 'a14')
+  host.handlers.get('agent/created')({ agent })
+  assert.equal(agent.tools.size, 3, '三个元工具应在 agent 作用域')
+  const restrictsBefore = host.restrictCalls.length
+  const groupMiss = globalThis.__dshToolLazy.reveal(agent, ['不存在的组xyz'])
+  assert.deepEqual(groupMiss, { opened: [], unknown: ['不存在的组xyz'] }, '未知组不得写成已放开')
+  assert.ok(host.restrictCalls.length > restrictsBefore, '未知组请求后应重新挂上掩码')
+  const wildcardMiss = globalThis.__dshToolLazy.reveal(agent, ['zzz_*'])
+  assert.deepEqual(wildcardMiss, { opened: [], unknown: ['zzz_*'] }, '零匹配通配符不得写成已放开')
+})
+
+test('reveal 命中：分组与通配符按实际命中回报', () => {
+  const host = makeHost()
+  apply(host.ctx, { core: ['pwsh'] })
+  const agent = makeAgent(host, 'a15')
+  host.handlers.get('agent/created')({ agent })
+  const byGroup = globalThis.__dshToolLazy.reveal(agent, ['github'])
+  assert.deepEqual(byGroup.unknown, [])
+  assert.deepEqual(byGroup.opened, ['github'])
+  const byWildcard = globalThis.__dshToolLazy.reveal(agent, ['mcp__time__*'])
+  assert.deepEqual(byWildcard.opened, ['mcp__time__*'])
+})
+
 test('生命周期：agent/disposed 不抛错，释放掩码并清掉状态', () => {
   const host = makeHost()
   apply(host.ctx, { core: ['pwsh'] })
@@ -259,6 +285,7 @@ test('生命周期：agent/disposed 不抛错，释放掩码并清掉状态', ()
   assert.doesNotThrow(() => host.handlers.get('agent/disposed')({ agent }))
   assert.equal(globalThis.__dshToolLazy.agents.size, before - 1, '销毁后状态应被清理')
   assert.ok(host.releasedCount() > releasedBefore, '销毁时应摘掉掩码')
+  assert.equal(agent.tools.size, 0, '销毁时应摘掉注册在 agent 作用域的元工具')
 })
 
 test('插件卸载：摘掉本实例的掩码并让共享桥失效', () => {
@@ -274,6 +301,7 @@ test('插件卸载：摘掉本实例的掩码并让共享桥失效', () => {
   assert.equal(globalThis.__dshToolLazy.reveal, undefined, '卸载后桥应失效')
   assert.ok(host.releasedCount() > releasedBefore, '卸载时应摘掉掩码')
   assert.equal(globalThis.__dshToolLazy.agents.size, 0, '卸载后状态应清空')
+  assert.equal(agent.tools.size, 0, '卸载后 agent 作用域的元工具应被摘掉')
 })
 
 test('工具函数：分组/通配/分词/估算', () => {
