@@ -1,0 +1,6 @@
+node_modules/
+*.log
+lazy.log
+skill-lazy.log
+.DS_Store
+Thumbs.db
