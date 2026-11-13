@@ -35,7 +35,10 @@
     "mcp__magpie-web-search__web_search",
     "mcp__magpie-web-search__web_fetch",
     "mcp__openviking__search",
-    "mcp__openviking__remember"
+    "mcp__openviking__remember",
+    "subagent",
+    "subagent_fork",
+    "plugin_manager"
   ],
   "protect": [],
   "autoLoadServers": [],
