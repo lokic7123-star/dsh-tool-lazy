@@ -45,3 +45,15 @@ node tests/mock.mjs     # 11 条用例，覆盖掩码/检索/揭示/幂等/失�
 
 - 安装：profile `package.json` 的 `dsh.profile.bundles` 加 `dsh-tool-lazy`，`dependencies` 加 `link:<本目录>`。
 - 卸载：把 `mode` 设为 `off`（立即恢复全量工具），或从 bundles/dependencies 移除后重启。
+
+## 使用与二次分发
+
+本项目以 MIT 许可发布：可自由使用、修改、再分发。
+
+**要求**：如果你把本项目的代码（含修改后的版本）用到别的项目或再发布，请注明来源：
+
+- 原项目：`dsh-tool-lazy`
+- 作者：lokic7123-star
+- 仓库：https://github.com/lokic7123-star/dsh-tool-lazy
+
+一句话的形式即可，例如「本插件基于 lokic7123-star 的 dsh-tool-lazy 修改」。
