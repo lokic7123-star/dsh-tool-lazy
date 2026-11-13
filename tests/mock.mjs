@@ -95,6 +95,8 @@ function makeHost() {
     disposers,
     globalTools,
     releasedCount: () => released,
+    restrictCalls,
+    emitChange,
     visibleNames: () => visibleTools().map((tool) => tool.name),
     setRestrictThrows: (value) => { restrictThrows = value },
   }
@@ -128,9 +130,11 @@ function makeAgent(host, id) {
 const tests = []
 const test = (label, fn) => tests.push({ label, fn })
 
+// 测试专用：把插件日志写到独立文件，避免污染宿主真实的 lazy.log（否则真机验誓时会读混）。
+const applyForTest = (host, config = {}) => apply(host.ctx, { logFile: 'mock-lazy.log', ...config })
 test('配置：按 agent 掩码时只 deny 非核心工具', () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh', 'read', 'write', 'edit', 'grep', 'glob', 'web_search', 'mcp__magpie-web-search__web_search'] })
+  applyForTest(host, { core: ['pwsh', 'read', 'write', 'edit', 'grep', 'glob', 'web_search', 'mcp__magpie-web-search__web_search'] })
   const agent = makeAgent(host, 'a1')
   host.handlers.get('agent/created')({ agent })
   assert.equal(host.restrictCalls.length, 1)
@@ -145,7 +149,7 @@ test('配置：按 agent 掩码时只 deny 非核心工具', () => {
 
 test('元工具注册在 agent 作用域（不受掩码影响）', () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'] })
+  applyForTest(host, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a2')
   host.handlers.get('agent/created')({ agent })
   for (const toolName of META) assert.ok(agent.tools.has(toolName), `${toolName} 应注册在 agent 作用域`)
@@ -153,7 +157,7 @@ test('元工具注册在 agent 作用域（不受掩码影响）', () => {
 
 test('tool_search：命中隐藏工具，只给参数签名不给完整 schema', async () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'] })
+  applyForTest(host, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a3')
   host.handlers.get('agent/created')({ agent })
   const search = agent.tools.get('tool_search')
@@ -166,7 +170,7 @@ test('tool_search：命中隐藏工具，只给参数签名不给完整 schema',
 
 test('tool_search：空 query 只列名字，不含 schema', async () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'] })
+  applyForTest(host, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a4')
   host.handlers.get('agent/created')({ agent })
   const output = await agent.tools.get('tool_search').execute({ query: '' })
@@ -177,7 +181,7 @@ test('tool_search：空 query 只列名字，不含 schema', async () => {
 
 test('tool_search：CJK 查询能召回', async () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'] })
+  applyForTest(host, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a5')
   host.handlers.get('agent/created')({ agent })
   const output = await agent.tools.get('tool_search').execute({ query: '抖音 视频转写' })
@@ -186,7 +190,7 @@ test('tool_search：CJK 查询能召回', async () => {
 
 test('tool_load：按名揭示后 deny 收缩，且核心工具保留', async () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh', 'read'] })
+  applyForTest(host, { core: ['pwsh', 'read'] })
   const agent = makeAgent(host, 'a6')
   host.handlers.get('agent/created')({ agent })
   const before = host.restrictCalls.at(-1).deny.length
@@ -201,7 +205,7 @@ test('tool_load：按名揭示后 deny 收缩，且核心工具保留', async ()
 
 test('tool_load：按分组整组揭示 + 未知名字提示', async () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'] })
+  applyForTest(host, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a7')
   host.handlers.get('agent/created')({ agent })
   const load = agent.tools.get('tool_load')
@@ -215,7 +219,7 @@ test('tool_load：按分组整组揭示 + 未知名字提示', async () => {
 
 test('揭示单调增长：重复加载不再新建掩码', async () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'] })
+  applyForTest(host, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a8')
   host.handlers.get('agent/created')({ agent })
   const load = agent.tools.get('tool_load')
@@ -228,7 +232,7 @@ test('揭示单调增长：重复加载不再新建掩码', async () => {
 
 test('tool_status：报可见/隐藏/估算 token，并按窗口占比告警', async () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'], contextWindow: 128000 })
+  applyForTest(host, { core: ['pwsh'], contextWindow: 128000 })
   const agent = makeAgent(host, 'a9')
   host.handlers.get('agent/created')({ agent })
   const output = await agent.tools.get('tool_status').execute({})
@@ -240,7 +244,7 @@ test('tool_status：报可见/隐藏/估算 token，并按窗口占比告警', a
 
 test('fail-open：restrict 抛错时记录原因并保持工具全开', async () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'] })
+  applyForTest(host, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a10')
   host.setRestrictThrows(true)
   host.handlers.get('agent/created')({ agent })
@@ -250,7 +254,7 @@ test('fail-open：restrict 抛错时记录原因并保持工具全开', async ()
 
 test('reconcile 桥：逐条回报 opened / unknown（供 dsh-skill-lazy 分别回执）', () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'] })
+  applyForTest(host, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a11')
   host.handlers.get('agent/created')({ agent })
   const hub = globalThis.__dshToolLazy
@@ -265,7 +269,7 @@ test('reconcile 桥：逐条回报 opened / unknown（供 dsh-skill-lazy 分别�
 
 test('reveal 零命中：可见集与掩码都不动', () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'] })
+  applyForTest(host, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a14')
   host.handlers.get('agent/created')({ agent })
   assert.equal(agent.tools.size, 3, '三个元工具应在 agent 作用域')
@@ -280,7 +284,7 @@ test('reveal 零命中：可见集与掩码都不动', () => {
 
 test('reveal 命中：分组与通配符按实际命中回报，且真的出现在可见集里', () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'] })
+  applyForTest(host, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a15')
   host.handlers.get('agent/created')({ agent })
   const byGroup = globalThis.__dshToolLazy.reveal(agent, ['github'])
@@ -299,7 +303,7 @@ test('reveal 命中：分组与通配符按实际命中回报，且真的出现�
 // （历史缺陷：请求真实存在的 github 组时桥返回「未找到」，掩码丢失、可见集从 2 涨到 16）
 test('揭示存在的组不被自身 tools/change 重入：目录全量保留、可见集按预期扩张', () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'] })
+  applyForTest(host, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a16')
   host.handlers.get('agent/created')({ agent })
   const baseline = host.visibleNames()
@@ -315,7 +319,7 @@ test('揭示存在的组不被自身 tools/change 重入：目录全量保留、
 
 test('混合请求：有效组真放开、未知组如实回报、其余仍隐藏', () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'] })
+  applyForTest(host, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a17')
   host.handlers.get('agent/created')({ agent })
   const baseline = host.visibleNames().length
@@ -329,7 +333,7 @@ test('混合请求：有效组真放开、未知组如实回报、其余仍隐�
 
 test('生命周期：agent/disposed 不抛错，释放掩码并清掉状态', () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'] })
+  applyForTest(host, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a12')
   host.handlers.get('agent/created')({ agent })
   const before = globalThis.__dshToolLazy.agents.size
@@ -343,7 +347,7 @@ test('生命周期：agent/disposed 不抛错，释放掩码并清掉状态', ()
 
 test('插件卸载：摘掉本实例的掩码并让共享桥失效', () => {
   const host = makeHost()
-  apply(host.ctx, { core: ['pwsh'] })
+  applyForTest(host, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a13')
   host.handlers.get('agent/created')({ agent })
   assert.equal(typeof globalThis.__dshToolLazy?.reveal, 'function')
@@ -355,6 +359,22 @@ test('插件卸载：摘掉本实例的掩码并让共享桥失效', () => {
   assert.ok(host.releasedCount() > releasedBefore, '卸载时应摘掉掩码')
   assert.equal(globalThis.__dshToolLazy.agents.size, 0, '卸载后状态应清空')
   assert.equal(agent.tools.size, 0, '卸载后 agent 作用域的元工具应被摘掉')
+})
+
+test('插件卸载后残留事件不再收敛：退休实例不得重挂掩码', () => {
+  const host = makeHost()
+  applyForTest(host, { core: ['pwsh'] })
+  const agent = makeAgent(host, 'a14')
+  host.handlers.get('agent/created')({ agent })
+  const lifecycle = host.disposers.find((item) => item.label === 'dsh-tool-lazy.lifecycle')
+  lifecycle.dispose()
+  const callsAfterDispose = host.restrictCalls.length
+  // 卸载与事件派发不保证先后：宿主可能再发一次 tools/change 与 pre-step。
+  host.emitChange()
+  host.handlers.get('agent/pre-step')({ agent }, () => undefined)
+  assert.equal(host.restrictCalls.length, callsAfterDispose, '退休实例不得再挂掩码')
+  assert.equal(globalThis.__dshToolLazy.agents.size, 0, '退休实例不得重建状态')
+  assert.equal(agent.tools.size, 0, '退休实例不得重新注册元工具')
 })
 
 test('工具函数：分组/通配/分词/估算', () => {
