@@ -224,6 +224,21 @@ test('fail-open：restrict 抛错时记录原因并保持工具全开', async ()
   assert.match(output, /掩码未生效原因：restrict exploded/)
 })
 
+test('reconcile 桥：逐条回报 opened / unknown（供 dsh-skill-lazy 分别回执）', () => {
+  const host = makeHost()
+  apply(host.ctx, { core: ['pwsh'] })
+  const agent = makeAgent(host, 'a11')
+  host.handlers.get('agent/created')({ agent })
+  const hub = globalThis.__dshToolLazy
+  assert.equal(typeof hub?.reveal, 'function', '应暴露共享桥')
+  const receipt = hub.reveal(agent, ['github', '不存在的组xyz'])
+  assert.deepEqual(receipt.opened, ['github'], '有效分组应进 opened')
+  assert.deepEqual(receipt.unknown, ['不存在的组xyz'], '未知名字应进 unknown')
+  assert.deepEqual(hub.reveal(agent, []), { opened: [], unknown: [] })
+  assert.ok(host.restrictCalls.some((call) => call.deny && !call.deny.includes('mcp__github__search_repositories')),
+    '揭示后 github 工具不应再出现在 deny 里')
+})
+
 test('工具函数：分组/通配/分词/估算', () => {
   assert.equal(groupOf('mcp__github__search_code'), 'github')
   assert.equal(groupOf('mcp__magpie-web-search__web_search'), 'magpie-web-search')
