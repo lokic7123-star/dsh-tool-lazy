@@ -39,7 +39,7 @@
   ],
   "protect": [],
   "autoLoadServers": [],
-  "searchMaxResults": 5,
+  "searchMaxResults": 3,
   "searchMaxChars": 24000,
   "loadMaxChars": 32000,
   "descriptionMaxChars": 600,

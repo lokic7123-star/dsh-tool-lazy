@@ -34,7 +34,9 @@ function makeHost() {
   const globalTools = new Map(ALL_TOOLS.map((tool) => [tool.name, tool]))
   const handlers = new Map()
   const restrictCalls = []
+  const disposers = []
   let restrictThrows = false
+  let released = 0
 
   const tools = {
     register(definition) {
@@ -53,7 +55,7 @@ function makeHost() {
     restrict(filter) {
       if (restrictThrows) throw new Error('restrict exploded')
       restrictCalls.push(filter)
-      return () => {}
+      return () => { released += 1 }
     },
   }
 
@@ -66,12 +68,19 @@ function makeHost() {
       handlers.set(event, handler)
       return () => handlers.delete(event)
     },
+    effect(factory, label) {
+      const dispose = factory()
+      if (typeof dispose === 'function') disposers.push({ label, dispose })
+      return () => {}
+    },
   }
   return {
     ctx,
     handlers,
     restrictCalls,
+    disposers,
     globalTools,
+    releasedCount: () => released,
     setRestrictThrows: (value) => { restrictThrows = value },
   }
 }
@@ -127,7 +136,7 @@ test('元工具注册在 agent 作用域（不受掩码影响）', () => {
   for (const toolName of META) assert.ok(agent.tools.has(toolName), `${toolName} 应注册在 agent 作用域`)
 })
 
-test('tool_search：命中隐藏工具并返回完整 schema', async () => {
+test('tool_search：命中隐藏工具，只给参数签名不给完整 schema', async () => {
   const host = makeHost()
   apply(host.ctx, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a3')
@@ -135,8 +144,8 @@ test('tool_search：命中隐藏工具并返回完整 schema', async () => {
   const search = agent.tools.get('tool_search')
   const output = await search.execute({ query: 'github pull request' })
   assert.match(output, /create_pull_request/)
-  assert.match(output, /parameters:/)
-  assert.match(output, /"type":"object"/)
+  assert.match(output, /参数：/)
+  assert.ok(!output.includes('"type":"object"'), '检索结果不应携带完整 schema（那是 tool_load 揭示后的事）')
   assert.match(output, /tool_load/)
 })
 
@@ -237,6 +246,34 @@ test('reconcile 桥：逐条回报 opened / unknown（供 dsh-skill-lazy 分别�
   assert.deepEqual(hub.reveal(agent, []), { opened: [], unknown: [] })
   assert.ok(host.restrictCalls.some((call) => call.deny && !call.deny.includes('mcp__github__search_repositories')),
     '揭示后 github 工具不应再出现在 deny 里')
+})
+
+test('生命周期：agent/disposed 不抛错，释放掩码并清掉状态', () => {
+  const host = makeHost()
+  apply(host.ctx, { core: ['pwsh'] })
+  const agent = makeAgent(host, 'a12')
+  host.handlers.get('agent/created')({ agent })
+  const before = globalThis.__dshToolLazy.agents.size
+  assert.ok(before >= 1, '创建后应有状态')
+  const releasedBefore = host.releasedCount()
+  assert.doesNotThrow(() => host.handlers.get('agent/disposed')({ agent }))
+  assert.equal(globalThis.__dshToolLazy.agents.size, before - 1, '销毁后状态应被清理')
+  assert.ok(host.releasedCount() > releasedBefore, '销毁时应摘掉掩码')
+})
+
+test('插件卸载：摘掉本实例的掩码并让共享桥失效', () => {
+  const host = makeHost()
+  apply(host.ctx, { core: ['pwsh'] })
+  const agent = makeAgent(host, 'a13')
+  host.handlers.get('agent/created')({ agent })
+  assert.equal(typeof globalThis.__dshToolLazy?.reveal, 'function')
+  const lifecycle = host.disposers.find((item) => item.label === 'dsh-tool-lazy.lifecycle')
+  assert.ok(lifecycle, '应注册生命周期清理 effect')
+  const releasedBefore = host.releasedCount()
+  lifecycle.dispose()
+  assert.equal(globalThis.__dshToolLazy.reveal, undefined, '卸载后桥应失效')
+  assert.ok(host.releasedCount() > releasedBefore, '卸载时应摘掉掩码')
+  assert.equal(globalThis.__dshToolLazy.agents.size, 0, '卸载后状态应清空')
 })
 
 test('工具函数：分组/通配/分词/估算', () => {
