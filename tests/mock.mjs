@@ -37,6 +37,14 @@ function makeHost() {
   const disposers = []
   let restrictThrows = false
   let released = 0
+  // 宿主语义：限制生效后 definitions()/view() 只暴露「可见集」；
+  // 摘掉限制与挂上限制都会**同步**发出 tools/change（这是本次重入 bug 的现实来源）。
+  let activeDeny = null
+  const emitChange = () => {
+    const handler = handlers.get('tools/change')
+    if (typeof handler === 'function') handler()
+  }
+  const visibleTools = () => [...globalTools.values()].filter((tool) => !(activeDeny && activeDeny.has(tool.name)))
 
   const tools = {
     register(definition) {
@@ -44,18 +52,24 @@ function makeHost() {
       return () => globalTools.delete(definition.name)
     },
     definitions() {
-      return [...globalTools.values()]
+      return visibleTools()
     },
     view() {
-      return { restrictableNames: [...globalTools.keys()] }
+      return { restrictableNames: visibleTools().map((tool) => tool.name) }
     },
     schemas() {
-      return [...globalTools.values()]
+      return visibleTools()
     },
     restrict(filter) {
       if (restrictThrows) throw new Error('restrict exploded')
       restrictCalls.push(filter)
-      return () => { released += 1 }
+      activeDeny = Array.isArray(filter?.deny) ? new Set(filter.deny) : null
+      emitChange()
+      return () => {
+        activeDeny = null
+        released += 1
+        emitChange()
+      }
     },
   }
 
@@ -81,6 +95,7 @@ function makeHost() {
     disposers,
     globalTools,
     releasedCount: () => released,
+    visibleNames: () => visibleTools().map((tool) => tool.name),
     setRestrictThrows: (value) => { restrictThrows = value },
   }
 }
@@ -248,21 +263,22 @@ test('reconcile 桥：逐条回报 opened / unknown（供 dsh-skill-lazy 分别�
     '揭示后 github 工具不应再出现在 deny 里')
 })
 
-test('reveal 零命中：不改可见集，但必须把掩码原样挂回去', () => {
+test('reveal 零命中：可见集与掩码都不动', () => {
   const host = makeHost()
   apply(host.ctx, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a14')
   host.handlers.get('agent/created')({ agent })
   assert.equal(agent.tools.size, 3, '三个元工具应在 agent 作用域')
-  const restrictsBefore = host.restrictCalls.length
+  const visibleBefore = host.visibleNames().slice().sort()
   const groupMiss = globalThis.__dshToolLazy.reveal(agent, ['不存在的组xyz'])
   assert.deepEqual(groupMiss, { opened: [], unknown: ['不存在的组xyz'] }, '未知组不得写成已放开')
-  assert.ok(host.restrictCalls.length > restrictsBefore, '未知组请求后应重新挂上掩码')
+  assert.deepEqual(host.visibleNames().slice().sort(), visibleBefore, '零命中后可见集不得变化')
   const wildcardMiss = globalThis.__dshToolLazy.reveal(agent, ['zzz_*'])
   assert.deepEqual(wildcardMiss, { opened: [], unknown: ['zzz_*'] }, '零匹配通配符不得写成已放开')
+  assert.deepEqual(host.visibleNames().slice().sort(), visibleBefore, '零匹配通配符后可见集不得变化')
 })
 
-test('reveal 命中：分组与通配符按实际命中回报', () => {
+test('reveal 命中：分组与通配符按实际命中回报，且真的出现在可见集里', () => {
   const host = makeHost()
   apply(host.ctx, { core: ['pwsh'] })
   const agent = makeAgent(host, 'a15')
@@ -270,8 +286,45 @@ test('reveal 命中：分组与通配符按实际命中回报', () => {
   const byGroup = globalThis.__dshToolLazy.reveal(agent, ['github'])
   assert.deepEqual(byGroup.unknown, [])
   assert.deepEqual(byGroup.opened, ['github'])
+  const visible = host.visibleNames()
+  assert.ok(visible.includes('mcp__github__search_repositories'), 'github 组成员应真的可见')
+  assert.ok(visible.includes('mcp__github__create_pull_request'))
+  assert.ok(!visible.includes('mcp__time__get_current_time'), '未请求的组应仍然隐藏')
   const byWildcard = globalThis.__dshToolLazy.reveal(agent, ['mcp__time__*'])
   assert.deepEqual(byWildcard.opened, ['mcp__time__*'])
+  assert.ok(host.visibleNames().includes('mcp__time__get_current_time'), '通配符命中的工具应真的可见')
+})
+
+// 重入：宿主摘/挂限制会同步 emit tools/change；揭示流程不得被自己这次事件打断
+// （历史缺陷：请求真实存在的 github 组时桥返回「未找到」，掩码丢失、可见集从 2 涨到 16）
+test('揭示存在的组不被自身 tools/change 重入：目录全量保留、可见集按预期扩张', () => {
+  const host = makeHost()
+  apply(host.ctx, { core: ['pwsh'] })
+  const agent = makeAgent(host, 'a16')
+  host.handlers.get('agent/created')({ agent })
+  const baseline = host.visibleNames()
+  assert.ok(baseline.includes('pwsh'), '创建时核心工具可见')
+  assert.ok(!baseline.includes('mcp__github__search_repositories'), '创建时 MCP 工具被隐藏')
+  const out = globalThis.__dshToolLazy.reveal(agent, ['github'])
+  assert.deepEqual(out, { opened: ['github'], unknown: [] }, '存在的组不得被判成未找到')
+  const visible = host.visibleNames()
+  assert.equal(visible.length, baseline.length + 2, '只应放开两个 github 工具，不得整片摘掩码')
+  assert.ok(visible.includes('mcp__github__search_repositories'))
+  assert.ok(visible.includes('mcp__github__create_pull_request'))
+})
+
+test('混合请求：有效组真放开、未知组如实回报、其余仍隐藏', () => {
+  const host = makeHost()
+  apply(host.ctx, { core: ['pwsh'] })
+  const agent = makeAgent(host, 'a17')
+  host.handlers.get('agent/created')({ agent })
+  const baseline = host.visibleNames().length
+  const out = globalThis.__dshToolLazy.reveal(agent, ['github', '不存在的组xyz'])
+  assert.deepEqual(out.opened, ['github'])
+  assert.deepEqual(out.unknown, ['不存在的组xyz'])
+  const visible = host.visibleNames()
+  assert.equal(visible.length, baseline + 2, '有效组放开、未知组不放开、其余保持隐藏')
+  assert.ok(!visible.includes('mcp__time__get_current_time'))
 })
 
 test('生命周期：agent/disposed 不抛错，释放掩码并清掉状态', () => {
