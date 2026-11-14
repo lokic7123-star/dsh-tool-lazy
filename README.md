@@ -16,7 +16,7 @@ DSH 插件：把低频工具（MCP / 插件工具）从每次请求的工具定�
 
 | 工具 | 作用 |
 | --- | --- |
-| `tool_search(query)` | BM25 检索隐藏工具，返回完整参数 schema（最多 5 个 / 预算内） |
+| `tool_search(query)` | BM25 检索隐藏工具，返回候选工具名 + 一行描述 + 参数签名（形如 `name*(string), limit(number)`，`*` 表示必填；默认最多 3 个，可用 `searchMaxResults` 调整）。完整 JSON Schema 只在工具被揭示/可见后由宿主提供给模型 |
 | `tool_load(names \| server)` | 把工具或整组揭示到本会话，之后即可正常调用 |
 | `tool_status()` | 报告可见/隐藏数量、估算 token、隐藏分组、占窗口比例 |
 
